@@ -38,6 +38,8 @@ export default function App() {
   const [newsForm, setNewsForm] = useState({ title: '', text: '', image: '', importance: '1', date: new Date().toISOString().split('T')[0] });
   const [editingNewsId, setEditingNewsId] = useState(null);
   const [editNewsForm, setEditNewsForm] = useState(null);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
   const [sortBy, setSortBy] = useState('date');
 
   useEffect(() => {
@@ -169,25 +171,29 @@ export default function App() {
   const handleMouseDownOnNode = (e, node) => {
     if (editingNodeId === node.id || connectMode) return;
     e.stopPropagation();
-    const rect = canvasRef.current.getBoundingClientRect();
     setDraggingNodeId(node.id);
     setHasDragged(false);
-    setDragOffset({ x: e.clientX - rect.left - node.x, y: e.clientY - rect.top - node.y });
+    setDragOffset({ x: e.clientX - node.x, y: e.clientY - node.y });
   };
 
-  const handleCanvasMouseMove = async (e) => {
-    if (!draggingNodeId || !canvasRef.current) return;
-    setHasDragged(true);
-    const rect = canvasRef.current.getBoundingClientRect();
-    const newX = Math.max(70, Math.min(rect.width - 70, e.clientX - rect.left - dragOffset.x));
-    const newY = Math.max(70, Math.min(rect.height - 70, e.clientY - rect.top - dragOffset.y));
-    
-    // آپدیت سریع محلی برای جلوگیری از پرش تصویر
-    setNodes(nodes.map(n => n.id === draggingNodeId ? { ...n, x: newX, y: newY } : n));
+  const handleCanvasMouseDown = (e) => {
+    if (e.target === canvasRef.current || e.target.closest('svg') === e.target) {
+      setIsPanning(true);
+    }
+  };
+
+  const handleCanvasMouseMove = (e) => {
+    if (draggingNodeId) {
+      setHasDragged(true);
+      const newX = e.clientX - dragOffset.x;
+      const newY = e.clientY - dragOffset.y;
+      setNodes(nodes.map(n => n.id === draggingNodeId ? { ...n, x: newX, y: newY } : n));
+    } else if (isPanning) {
+      setPan(prev => ({ x: prev.x + e.movementX, y: prev.y + e.movementY }));
+    }
   };
 
   const handleCanvasMouseUp = async () => {
-    // آپدیت مختصات جدید در فایربیس پس از رها کردن ماوس
     if (draggingNodeId && hasDragged) {
       const nodeToUpdate = nodes.find(n => n.id === draggingNodeId);
       if (nodeToUpdate) {
@@ -195,6 +201,7 @@ export default function App() {
       }
     }
     setDraggingNodeId(null);
+    setIsPanning(false);
   };
 
   const handleNodeClick = async (node) => {
@@ -224,8 +231,8 @@ export default function App() {
   const handleAddNode = async (e) => {
     e.preventDefault();
     if (!newNodeName.trim()) return;
-    const randomX = Math.floor(Math.random() * 400) + 250;
-    const randomY = Math.floor(Math.random() * 250) + 150;
+    const randomX = Math.floor(Math.random() * 400) + 250 - pan.x;
+    const randomY = Math.floor(Math.random() * 250) + 150 - pan.y;
     const newNode = { 
       id: 'n_' + Date.now(), name: newNodeName.trim(), 
       x: randomX, y: randomY, 
@@ -368,10 +375,20 @@ export default function App() {
     return parseInt(b.importance) - parseInt(a.importance);
   });
 
-  const connectedNodes = activeNode ? edges.filter(e => e.source === activeNode.id || e.target === activeNode.id).map(e => {
-    const targetId = e.source === activeNode.id ? e.target : e.source;
-    return nodes.find(n => n.id === targetId);
-  }).filter(Boolean) : [];
+  const getPathToRoot = (nodeId, currentPath = []) => {
+    if (currentPath.length > 10) return currentPath;
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node) return currentPath;
+    const newPath = [node, ...currentPath];
+    const parentEdge = edges.find(e => e.target === nodeId);
+    if (!parentEdge) return newPath;
+    if (currentPath.some(n => n.id === parentEdge.source)) return newPath;
+    return getPathToRoot(parentEdge.source, newPath);
+  };
+
+  const hierarchyPath = activeNodeId ? getPathToRoot(activeNodeId) : [];
+  const childEdges = activeNodeId ? edges.filter(e => e.source === activeNodeId) : [];
+  const childNodes = childEdges.map(e => nodes.find(n => n.id === e.target)).filter(Boolean);
 
   return (
     <div dir="rtl" className="min-h-screen bg-slate-950 font-sans text-slate-100 selection:bg-indigo-500/30 flex flex-col">
@@ -411,8 +428,9 @@ export default function App() {
               </div>
             </div>
 
-            <div ref={canvasRef} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} className="relative flex-1 min-h-[560px] w-full bg-slate-950 rounded-3xl border border-slate-800/80 overflow-hidden select-none" style={{ backgroundImage: 'radial-gradient(#334155 1px, transparent 1px)', backgroundSize: '28px 28px' }}>
-              <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
+            <div ref={canvasRef} onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} className={`relative flex-1 min-h-[560px] w-full bg-slate-950 rounded-3xl border border-slate-800/80 overflow-hidden select-none ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`} style={{ backgroundImage: 'radial-gradient(#334155 1px, transparent 1px)', backgroundSize: '28px 28px', backgroundPosition: `${pan.x}px ${pan.y}px` }}>
+              <div style={{ transform: `translate(${pan.x}px, ${pan.y}px)`, position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+              <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none z-0">
                 <defs>
                 <linearGradient id="edgeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
                   <stop offset="0%" stopColor="#6366f1" stopOpacity="0.6" />
@@ -444,7 +462,7 @@ export default function App() {
                 const isSelectedSource = connectSourceId === node.id;
                 const nodeNewsCount = news.filter(n => n.nodeId === node.id).length;
                 return (
-                  <div key={node.id} onMouseDown={(e) => handleMouseDownOnNode(e, node)} onClick={() => handleNodeClick(node)} style={{ left: `${node.x}px`, top: `${node.y}px`, transform: 'translate(-50%, -50%)' }} className={`absolute z-10 w-36 h-36 rounded-full flex flex-col items-center justify-center transition-shadow duration-200 group ${draggingNodeId === node.id ? 'cursor-grabbing scale-105' : 'cursor-grab'} ${isSelectedSource ? 'bg-amber-950/90 border-4 border-amber-400' : isOwner ? 'bg-slate-900/95 border-2 border-indigo-500/60 hover:border-indigo-400 shadow-[0_0_30px_rgba(79,70,229,0.2)]' : 'bg-slate-900/95 border-2 border-emerald-500/60 hover:border-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.2)]'}`}>
+                  <div key={node.id} onMouseDown={(e) => handleMouseDownOnNode(e, node)} onClick={() => handleNodeClick(node)} style={{ left: `${node.x}px`, top: `${node.y}px`, transform: 'translate(-50%, -50%)' }} className={`absolute z-10 w-36 h-36 rounded-full flex flex-col items-center justify-center transition-shadow duration-200 group pointer-events-auto ${draggingNodeId === node.id ? 'cursor-grabbing scale-105' : 'cursor-grab'} ${isSelectedSource ? 'bg-amber-950/90 border-4 border-amber-400' : isOwner ? 'bg-slate-900/95 border-2 border-indigo-500/60 hover:border-indigo-400 shadow-[0_0_30px_rgba(79,70,229,0.2)]' : 'bg-slate-900/95 border-2 border-emerald-500/60 hover:border-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.2)]'}`}>
                     {!isOwner && <span className="absolute -top-2 bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">اشتراکی از {node.ownerName}</span>}
                     {editingNodeId !== node.id && !connectMode && (
                       <div className="absolute -top-3 -right-3 flex gap-1 opacity-0 group-hover:opacity-100 z-20 bg-slate-950/90 p-1 rounded-full border border-slate-700">
@@ -467,6 +485,7 @@ export default function App() {
                   </div>
                 );
               })}
+              </div>
             </div>
           </div>
         ) : (
@@ -475,9 +494,27 @@ export default function App() {
               <div>
                 <div className="flex items-center gap-3"><h2 className="text-2xl font-black text-white">{activeNode?.name}</h2>
                 {!canEditActiveNode && <span className="bg-emerald-500/10 text-emerald-400 text-xs px-2.5 py-1 rounded-lg flex items-center gap-1"><Eye size={13} /> متعلق به {activeNode?.ownerName}</span>}</div>
-                {connectedNodes.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-2 mt-3"><span className="text-xs text-slate-400"><Link2 size={13} className="text-indigo-400 inline" /> مرتبط:</span>
-                    {connectedNodes.map(cn => <button key={cn.id} onClick={() => setActiveNodeId(cn.id)} className="text-xs bg-slate-950 text-indigo-300 border border-indigo-500/30 px-2.5 py-1 rounded-lg">{cn.name}</button>)}
+                {hierarchyPath.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 mt-3 text-xs">
+                    <span className="text-slate-400 flex items-center gap-1"><Network size={13} className="text-indigo-400"/> مسیر:</span>
+                    {hierarchyPath.map((n, i) => (
+                      <span key={n.id} className="flex items-center gap-1.5">
+                        <button onClick={() => setActiveNodeId(n.id)} className={`px-2.5 py-1 rounded-lg border transition-colors ${n.id === activeNodeId ? 'bg-indigo-900/40 border-indigo-500/50 text-indigo-300 font-bold' : 'bg-slate-950 border-slate-700 text-slate-300 hover:border-slate-500'}`}>
+                          {n.name}
+                        </button>
+                        {i < hierarchyPath.length - 1 && <ArrowRight size={12} className="text-slate-600" />}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {childNodes.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
+                    <span className="text-slate-400 flex items-center gap-1"><Link2 size={13} className="text-emerald-400"/> فرزندان (زیرشاخه‌ها):</span>
+                    {childNodes.map(cn => (
+                      <button key={cn.id} onClick={() => setActiveNodeId(cn.id)} className="bg-slate-950 text-emerald-400 border border-emerald-900/50 hover:border-emerald-500/50 px-2.5 py-1 rounded-lg transition-colors">
+                        {cn.name}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
