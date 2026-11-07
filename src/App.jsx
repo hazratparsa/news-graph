@@ -203,7 +203,13 @@ export default function App() {
         const exists = edges.some(e => (e.source === connectSourceId && e.target === node.id) || (e.source === node.id && e.target === connectSourceId));
         if (!exists) {
           const newEdge = { id: 'e_' + Date.now(), source: connectSourceId, target: node.id, ownerId: currentUserId };
-          await supabase.from('edges').insert([newEdge]); // <--- تغییر سوپابیس
+          // آپدیت آنی (خوش‌بینانه)
+          setEdges(prev => [...prev, newEdge]);
+          const { error } = await supabase.from('edges').insert([newEdge]); // <--- تغییر سوپابیس
+          if (error) {
+             setEdges(prev => prev.filter(e => e.id !== newEdge.id));
+             console.error(error);
+          }
         }
         setConnectSourceId(null);
         setConnectMode(false);
@@ -225,62 +231,93 @@ export default function App() {
       shareToken: 'SHARE-' + Math.random().toString(36).substring(2, 7).toUpperCase(), 
       subscribers: [] 
     };
-    await supabase.from('nodes').insert([newNode]); // <--- تغییر سوپابیس
+    
+    // آپدیت آنی در استیت (Optimistic UI Update)
+    setNodes(prevNodes => [...prevNodes, newNode]);
     setNewNodeName('');
+    
+    const { error } = await supabase.from('nodes').insert([newNode]); // <--- تغییر سوپابیس
+    
+    // اگر در ذخیره در سرور خطایی رخ داد، نود را از صفحه حذف کن
+    if (error) {
+      console.error(error);
+      alert('خطا در ذخیره نود');
+      setNodes(prevNodes => prevNodes.filter(n => n.id !== newNode.id));
+    }
   };
 
   const handleAddNews = async (e) => {
     e.preventDefault();
     const newItem = { ...newsForm, id: Date.now().toString(), nodeId: activeNodeId, authorName: currentUserName };
-    await supabase.from('news').insert([newItem]); // <--- تغییر سوپابیس
+    
+    // آپدیت آنی
+    setNews(prev => [...prev, newItem]);
     setShowNewsForm(false);
     setNewsForm({ title: '', text: '', image: '', importance: '1', date: new Date().toISOString().split('T')[0] });
+    
+    const { error } = await supabase.from('news').insert([newItem]); // <--- تغییر سوپابیس
+    if(error) {
+       setNews(prev => prev.filter(n => n.id !== newItem.id));
+       console.error(error);
+    }
   };
 
   const handleDeleteNode = async (node, e) => {
     e.stopPropagation();
     if (node.ownerId !== currentUserId) {
-      if (window.confirm(`آیا می‌خواهید این گره را از بوم خود حذف کنید؟`)) {
+      if (window.confirm(`آیا می‌خواهید این نود را از بوم خود حذف کنید؟`)) {
         const newSubscribers = node.subscribers.filter(id => id !== currentUserId);
+        setNodes(prev => prev.map(n => n.id === node.id ? {...n, subscribers: newSubscribers} : n));
         await supabase.from('nodes').update({ subscribers: newSubscribers }).eq('id', node.id); // <--- تغییر سوپابیس
       }
       return;
     }
-    if (window.confirm(`آیا از حذف کامل گره مطمئن هستید؟`)) {
+    if (window.confirm(`آیا از حذف کامل نود مطمئن هستید؟`)) {
+      setNodes(prev => prev.filter(n => n.id !== node.id));
       await supabase.from('nodes').delete().eq('id', node.id); // <--- تغییر سوپابیس
       
       // پاکسازی یال‌ها و اخبار متصل
       const edgesToDelete = edges.filter(edge => edge.source === node.id || edge.target === node.id);
-      for (const edge of edgesToDelete) {
-        await supabase.from('edges').delete().eq('id', edge.id);
+      if (edgesToDelete.length > 0) {
+         setEdges(prev => prev.filter(edge => edge.source !== node.id && edge.target !== node.id));
+         for (const edge of edgesToDelete) {
+           await supabase.from('edges').delete().eq('id', edge.id);
+         }
       }
       
       const newsToDelete = news.filter(item => item.nodeId === node.id);
-      for (const item of newsToDelete) {
-        await supabase.from('news').delete().eq('id', item.id.toString());
+      if(newsToDelete.length > 0) {
+         setNews(prev => prev.filter(item => item.nodeId !== node.id));
+         for (const item of newsToDelete) {
+           await supabase.from('news').delete().eq('id', item.id.toString());
+         }
       }
     }
   };
 
   const handleDeleteEdge = async (edgeId) => {
+    setEdges(prev => prev.filter(e => e.id !== edgeId));
     await supabase.from('edges').delete().eq('id', edgeId); // <--- تغییر سوپابیس
   };
 
   const handleDeleteNews = async (id) => {
+    setNews(prev => prev.filter(n => n.id !== id.toString()));
     await supabase.from('news').delete().eq('id', id.toString()); // <--- تغییر سوپابیس
   };
 
   const handleSaveEditNode = async (id, e) => {
     e.stopPropagation();
-    if (editNodeName.trim()) {
-      await supabase.from('nodes').update({ name: editNodeName.trim() }).eq('id', id);
+    const newName = editNodeName.trim();
+    if (newName) {
+      setNodes(prev => prev.map(n => n.id === id ? {...n, name: newName} : n));
+      await supabase.from('nodes').update({ name: newName }).eq('id', id);
     }
     setEditingNodeId(null);
   };
 
   const handleShareSingleNode = (node, e) => {
     e.stopPropagation();
-    setShareModalData({ title: `اشتراک‌گذاری گره «${node.name}»`, desc: 'کد زیر را به دوستان خود بدهید.', token: node.shareToken });
+    setShareModalData({ title: `اشتراک‌گذاری نود «${node.name}»`, desc: 'کد زیر را به دوستان خود بدهید.', token: node.shareToken });
   };
 
   const handleImportShared = async (e) => {
@@ -289,9 +326,11 @@ export default function App() {
     if (!code) return;
     const targetNode = nodes.find(n => n.shareToken === code);
     if (!targetNode) return alert('کد اشتراک در دیتابیس یافت نشد!');
-    if (targetNode.ownerId === currentUserId) return alert('این گره متعلق به خودتان است!');
+    if (targetNode.ownerId === currentUserId) return alert('این نود متعلق به خودتان است!');
     if (!targetNode.subscribers.includes(currentUserId)) {
-      await supabase.from('nodes').update({ subscribers: [...targetNode.subscribers, currentUserId] }).eq('id', targetNode.id);
+      const newSubscribers = [...targetNode.subscribers, currentUserId];
+      setNodes(prev => prev.map(n => n.id === targetNode.id ? {...n, subscribers: newSubscribers} : n));
+      await supabase.from('nodes').update({ subscribers: newSubscribers }).eq('id', targetNode.id);
     }
     setImportModalOpen(false);
     setImportTokenInput('');
@@ -339,12 +378,12 @@ export default function App() {
           <div className="flex-1 flex flex-col gap-4">
             <div className="bg-slate-900/90 border border-slate-800 p-3 rounded-2xl flex flex-wrap items-center justify-between gap-4">
               <form onSubmit={handleAddNode} className="flex gap-2 flex-1 max-w-md">
-                <input type="text" placeholder="نام گره جدید..." value={newNodeName} onChange={(e) => setNewNodeName(e.target.value)} className="flex-1 px-4 py-2 bg-slate-950 text-white border border-slate-800 focus:border-indigo-500 rounded-xl outline-none text-sm" />
-                <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5"><Plus size={18} /> ساخت گره</button>
+                <input type="text" placeholder="نام نود جدید..." value={newNodeName} onChange={(e) => setNewNodeName(e.target.value)} className="flex-1 px-4 py-2 bg-slate-950 text-white border border-slate-800 focus:border-indigo-500 rounded-xl outline-none text-sm" />
+                <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5"><Plus size={18} /> ساخت نود</button>
               </form>
               <div className="flex items-center gap-3">
                 <span className="text-xs text-slate-400 hidden md:inline-flex items-center gap-1"><Move size={14} /> جابجایی با ماوس</span>
-                <button onClick={() => { setConnectMode(!connectMode); setConnectSourceId(null); }} className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border ${connectMode ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse' : 'bg-slate-800 text-slate-300'}`}><Link2 size={16} /> {connectMode ? 'کلیک روی گره...' : 'اتصال گرهها'}</button>
+                <button onClick={() => { setConnectMode(!connectMode); setConnectSourceId(null); }} className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border ${connectMode ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse' : 'bg-slate-800 text-slate-300'}`}><Link2 size={16} /> {connectMode ? 'کلیک روی نود...' : 'اتصال نودها'}</button>
               </div>
             </div>
 
@@ -458,12 +497,16 @@ export default function App() {
       {importModalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <form onSubmit={handleImportShared} className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex justify-between mb-3"><h3 className="font-bold text-lg text-white">افزودن گره مشترک</h3><button type="button" onClick={() => setImportModalOpen(false)} className="text-slate-400"><X size={20}/></button></div>
+            <div className="flex justify-between mb-3"><h3 className="font-bold text-lg text-white">افزودن نود مشترک</h3><button type="button" onClick={() => setImportModalOpen(false)} className="text-slate-400"><X size={20}/></button></div>
             <input required type="text" placeholder="کد اشتراک را اینجا وارد کنید..." value={importTokenInput} onChange={e => setImportTokenInput(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white font-mono text-sm outline-none mb-4" />
-            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-xl text-sm">اتصال به گره</button>
+            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-xl text-sm">اتصال به نود</button>
           </form>
         </div>
       )}
+
+      <footer className="py-4 text-center text-xs text-slate-500 mt-auto border-t border-slate-800/50">
+        Created by Parsa Momtaz
+      </footer>
     </div>
   );
 }
