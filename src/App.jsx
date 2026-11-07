@@ -36,6 +36,8 @@ export default function App() {
   const [importTokenInput, setImportTokenInput] = useState('');
   const [showNewsForm, setShowNewsForm] = useState(false);
   const [newsForm, setNewsForm] = useState({ title: '', text: '', image: '', importance: '1', date: new Date().toISOString().split('T')[0] });
+  const [editingNewsId, setEditingNewsId] = useState(null);
+  const [editNewsForm, setEditNewsForm] = useState(null);
   const [sortBy, setSortBy] = useState('date');
 
   useEffect(() => {
@@ -305,6 +307,28 @@ export default function App() {
     await supabase.from('news').delete().eq('id', id.toString()); // <--- تغییر سوپابیس
   };
 
+  const handleStartEditNews = (item) => {
+    setEditingNewsId(item.id);
+    setEditNewsForm({ ...item });
+  };
+
+  const handleSaveEditNews = async (e) => {
+    e.preventDefault();
+    setNews(prev => prev.map(n => n.id === editingNewsId ? editNewsForm : n));
+    setEditingNewsId(null);
+    const { error } = await supabase.from('news').update({
+      title: editNewsForm.title,
+      text: editNewsForm.text,
+      importance: editNewsForm.importance,
+      date: editNewsForm.date
+    }).eq('id', editNewsForm.id);
+    
+    if (error) {
+      console.error(error);
+      alert('خطا در ویرایش خبر');
+    }
+  };
+
   const handleSaveEditNode = async (id, e) => {
     e.stopPropagation();
     const newName = editNodeName.trim();
@@ -389,7 +413,15 @@ export default function App() {
 
             <div ref={canvasRef} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} className="relative flex-1 min-h-[560px] w-full bg-slate-950 rounded-3xl border border-slate-800/80 overflow-hidden select-none" style={{ backgroundImage: 'radial-gradient(#334155 1px, transparent 1px)', backgroundSize: '28px 28px' }}>
               <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
-                <defs><linearGradient id="edgeGradient" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stopColor="#6366f1" stopOpacity="0.6" /><stop offset="100%" stopColor="#10b981" stopOpacity="0.6" /></linearGradient></defs>
+                <defs>
+                <linearGradient id="edgeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#6366f1" stopOpacity="0.6" />
+                  <stop offset="100%" stopColor="#10b981" stopOpacity="0.6" />
+                </linearGradient>
+                <marker id="arrow" viewBox="0 0 10 10" refX="78" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" opacity="0.9" />
+                </marker>
+              </defs>
                 {visibleEdges.map(edge => {
                   const sourceNode = visibleNodes.find(n => n.id === edge.source);
                   const targetNode = visibleNodes.find(n => n.id === edge.target);
@@ -398,7 +430,7 @@ export default function App() {
                   const midY = (sourceNode.y + targetNode.y) / 2;
                   return (
                     <g key={edge.id} className="group pointer-events-auto">
-                      <line x1={sourceNode.x} y1={sourceNode.y} x2={targetNode.x} y2={targetNode.y} stroke="url(#edgeGradient)" strokeWidth="3" strokeDasharray="6 4" className="transition-all group-hover:stroke-red-400 group-hover:stroke-[4px]" />
+                      <line x1={sourceNode.x} y1={sourceNode.y} x2={targetNode.x} y2={targetNode.y} stroke="url(#edgeGradient)" strokeWidth="3" strokeDasharray="6 4" markerEnd="url(#arrow)" className="transition-all group-hover:stroke-red-400 group-hover:stroke-[4px]" />
                       {edge.ownerId === currentUserId && (
                         <g onClick={() => handleDeleteEdge(edge.id)} className="cursor-pointer opacity-0 group-hover:opacity-100" transform={`translate(${midX}, ${midY})`}><circle r="12" fill="#0f172a" stroke="#ef4444" strokeWidth="2" /><line x1="-4" y1="-4" x2="4" y2="4" stroke="#ef4444" strokeWidth="2" /><line x1="4" y1="-4" x2="-4" y2="4" stroke="#ef4444" strokeWidth="2" /></g>
                       )}
@@ -468,15 +500,37 @@ export default function App() {
             <div className="grid grid-cols-1 gap-5">
               {currentCategoryNews.map((item) => (
                 <article key={item.id} className="bg-slate-900 rounded-2xl border border-slate-800 p-6 flex flex-col justify-between">
-                  <div>
-                    <div className="flex gap-3 mb-3 text-xs font-bold text-slate-400">
-                      <span className="flex items-center gap-1.5 bg-slate-950 px-3 py-1 rounded-lg border border-slate-800"><Calendar size={13} /> {item.date}</span>
-                      <span className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border ${item.importance === '3' ? 'text-red-400 border-red-900/60' : item.importance === '2' ? 'text-amber-400 border-amber-900/60' : 'text-blue-400 border-blue-900/60'}`}><Star size={13} fill="currentColor" /> {item.importance === '3' ? 'فوری' : item.importance === '2' ? 'مهم' : 'عادی'}</span>
-                    </div>
-                    <h3 className="text-xl font-bold text-white mb-2">{item.title}</h3>
-                    <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{item.text}</p>
-                  </div>
-                  {canEditActiveNode && <div className="mt-5 pt-3 border-t border-slate-800/80 flex justify-end"><button onClick={() => handleDeleteNews(item.id)} className="text-red-400 hover:text-red-300 bg-slate-950 hover:bg-slate-800 p-2 rounded-lg border border-slate-800"><Trash2 size={16} /></button></div>}
+                  {editingNewsId === item.id ? (
+                    <form onSubmit={handleSaveEditNews} className="flex flex-col gap-3">
+                      <input required type="text" value={editNewsForm.title} onChange={e => setEditNewsForm({...editNewsForm, title: e.target.value})} className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none" />
+                      <textarea required value={editNewsForm.text} onChange={e => setEditNewsForm({...editNewsForm, text: e.target.value})} rows="4" className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none resize-none"></textarea>
+                      <div className="flex gap-3">
+                        <input required type="date" value={editNewsForm.date} onChange={e => setEditNewsForm({...editNewsForm, date: e.target.value})} className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none text-sm flex-1" />
+                        <select value={editNewsForm.importance} onChange={e => setEditNewsForm({...editNewsForm, importance: e.target.value})} className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none text-sm flex-1"><option value="1">عادی</option><option value="2">مهم</option><option value="3">فوری</option></select>
+                      </div>
+                      <div className="flex justify-end gap-2 mt-2">
+                        <button type="button" onClick={() => setEditingNewsId(null)} className="px-5 py-2 rounded-xl text-sm bg-slate-800 hover:bg-slate-700 text-slate-300">لغو</button>
+                        <button type="submit" className="px-5 py-2 rounded-xl text-sm bg-indigo-600 hover:bg-indigo-500 text-white font-bold"><Check size={16} className="inline mr-1"/> ذخیره</button>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <div>
+                        <div className="flex gap-3 mb-3 text-xs font-bold text-slate-400">
+                          <span className="flex items-center gap-1.5 bg-slate-950 px-3 py-1 rounded-lg border border-slate-800"><Calendar size={13} /> {item.date}</span>
+                          <span className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border ${item.importance === '3' ? 'text-red-400 border-red-900/60' : item.importance === '2' ? 'text-amber-400 border-amber-900/60' : 'text-blue-400 border-blue-900/60'}`}><Star size={13} fill="currentColor" /> {item.importance === '3' ? 'فوری' : item.importance === '2' ? 'مهم' : 'عادی'}</span>
+                        </div>
+                        <h3 className="text-xl font-bold text-white mb-2">{item.title}</h3>
+                        <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{item.text}</p>
+                      </div>
+                      {canEditActiveNode && (
+                        <div className="mt-5 pt-3 border-t border-slate-800/80 flex justify-end gap-2">
+                          <button onClick={() => handleStartEditNews(item)} className="text-blue-400 hover:text-blue-300 bg-slate-950 hover:bg-slate-800 p-2 rounded-lg border border-slate-800"><Edit2 size={16} /></button>
+                          <button onClick={() => handleDeleteNews(item.id)} className="text-red-400 hover:text-red-300 bg-slate-950 hover:bg-slate-800 p-2 rounded-lg border border-slate-800"><Trash2 size={16} /></button>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </article>
               ))}
             </div>
