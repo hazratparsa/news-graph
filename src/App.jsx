@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { 
   Plus, ArrowRight, Star, Calendar, Image as ImageIcon, 
   Trash2, Edit2, Network, Check, X, Share2, Link2, 
-  Download, Move, Eye, LogOut, Lock, Mail, Key
+  Download, Move, Eye, LogOut, Lock, Mail, Key, Bookmark, CheckCircle
 } from 'lucide-react';
 
 import { supabase } from './supabase';
@@ -16,12 +16,15 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // استیت‌های خالی (دیتا از سرور پر می‌شود)
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [news, setNews] = useState([]);
 
+  // Views: 'canvas', 'node', 'calendar', 'saved'
+  const [activeView, setActiveView] = useState('canvas');
   const [activeNodeId, setActiveNodeId] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+
   const [newNodeName, setNewNodeName] = useState('');
   const [draggingNodeId, setDraggingNodeId] = useState(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
@@ -60,7 +63,6 @@ export default function App() {
   useEffect(() => {
     if (!authUser) return;
 
-    // تابع دریافت تمام اطلاعات
     const fetchGraphData = async () => {
       const [{ data: nodesData }, { data: edgesData }, { data: newsData }] = await Promise.all([
         supabase.from('nodes').select('*'),
@@ -72,10 +74,8 @@ export default function App() {
       if (newsData) setNews(newsData);
     };
 
-    // اجرای اولیه
     fetchGraphData();
 
-    // گوش دادن به تغییرات زنده (Real-time) دیتابیس
     const channel = supabase.channel('graph_realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'nodes' }, fetchGraphData)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'edges' }, fetchGraphData)
@@ -212,9 +212,8 @@ export default function App() {
         const exists = edges.some(e => (e.source === connectSourceId && e.target === node.id) || (e.source === node.id && e.target === connectSourceId));
         if (!exists) {
           const newEdge = { id: 'e_' + Date.now(), source: connectSourceId, target: node.id, ownerId: currentUserId };
-          // آپدیت آنی (خوش‌بینانه)
           setEdges(prev => [...prev, newEdge]);
-          const { error } = await supabase.from('edges').insert([newEdge]); // <--- تغییر سوپابیس
+          const { error } = await supabase.from('edges').insert([newEdge]);
           if (error) {
              setEdges(prev => prev.filter(e => e.id !== newEdge.id));
              console.error(error);
@@ -225,7 +224,10 @@ export default function App() {
       } else setConnectSourceId(null);
       return;
     }
-    if (editingNodeId !== node.id) setActiveNodeId(node.id);
+    if (editingNodeId !== node.id) {
+      setActiveNodeId(node.id);
+      setActiveView('node');
+    }
   };
 
   const handleAddNode = async (e) => {
@@ -241,16 +243,13 @@ export default function App() {
       subscribers: [] 
     };
     
-    // آپدیت آنی در استیت (Optimistic UI Update)
     setNodes(prevNodes => [...prevNodes, newNode]);
     setNewNodeName('');
     
-    const { error } = await supabase.from('nodes').insert([newNode]); // <--- تغییر سوپابیس
-    
-    // اگر در ذخیره در سرور خطایی رخ داد، گره را از صفحه حذف کن
+    const { error } = await supabase.from('nodes').insert([newNode]);
     if (error) {
       console.error(error);
-      alert('خطا در ذخیره گره');
+      alert('خطا در ذخیره نود');
       setNodes(prevNodes => prevNodes.filter(n => n.id !== newNode.id));
     }
   };
@@ -259,12 +258,11 @@ export default function App() {
     e.preventDefault();
     const newItem = { ...newsForm, id: Date.now().toString(), nodeId: activeNodeId, authorName: currentUserName };
     
-    // آپدیت آنی
     setNews(prev => [...prev, newItem]);
     setShowNewsForm(false);
     setNewsForm({ title: '', text: '', image: '', importance: '1', date: new Date().toISOString().split('T')[0] });
     
-    const { error } = await supabase.from('news').insert([newItem]); // <--- تغییر سوپابیس
+    const { error } = await supabase.from('news').insert([newItem]);
     if(error) {
        setNews(prev => prev.filter(n => n.id !== newItem.id));
        console.error(error);
@@ -274,18 +272,17 @@ export default function App() {
   const handleDeleteNode = async (node, e) => {
     e.stopPropagation();
     if (node.ownerId !== currentUserId) {
-      if (window.confirm(`آیا می‌خواهید این گره را از بوم خود حذف کنید؟`)) {
+      if (window.confirm(`آیا می‌خواهید این نود را از بوم خود حذف کنید؟`)) {
         const newSubscribers = node.subscribers.filter(id => id !== currentUserId);
         setNodes(prev => prev.map(n => n.id === node.id ? {...n, subscribers: newSubscribers} : n));
-        await supabase.from('nodes').update({ subscribers: newSubscribers }).eq('id', node.id); // <--- تغییر سوپابیس
+        await supabase.from('nodes').update({ subscribers: newSubscribers }).eq('id', node.id);
       }
       return;
     }
-    if (window.confirm(`آیا از حذف کامل گره مطمئن هستید؟`)) {
+    if (window.confirm(`آیا از حذف کامل نود مطمئن هستید؟`)) {
       setNodes(prev => prev.filter(n => n.id !== node.id));
-      await supabase.from('nodes').delete().eq('id', node.id); // <--- تغییر سوپابیس
+      await supabase.from('nodes').delete().eq('id', node.id);
       
-      // پاکسازی یال‌ها و اخبار متصل
       const edgesToDelete = edges.filter(edge => edge.source === node.id || edge.target === node.id);
       if (edgesToDelete.length > 0) {
          setEdges(prev => prev.filter(edge => edge.source !== node.id && edge.target !== node.id));
@@ -306,12 +303,12 @@ export default function App() {
 
   const handleDeleteEdge = async (edgeId) => {
     setEdges(prev => prev.filter(e => e.id !== edgeId));
-    await supabase.from('edges').delete().eq('id', edgeId); // <--- تغییر سوپابیس
+    await supabase.from('edges').delete().eq('id', edgeId);
   };
 
   const handleDeleteNews = async (id) => {
     setNews(prev => prev.filter(n => n.id !== id.toString()));
-    await supabase.from('news').delete().eq('id', id.toString()); // <--- تغییر سوپابیس
+    await supabase.from('news').delete().eq('id', id.toString());
   };
 
   const handleStartEditNews = (item) => {
@@ -348,7 +345,7 @@ export default function App() {
 
   const handleShareSingleNode = (node, e) => {
     e.stopPropagation();
-    setShareModalData({ title: `اشتراک‌گذاری گره «${node.name}»`, desc: 'کد زیر را به دوستان خود بدهید.', token: node.shareToken });
+    setShareModalData({ title: `اشتراک‌گذاری نود «${node.name}»`, desc: 'با افزودن این کد، نود و تمامی فرزندان آن اضافه خواهند شد.', token: node.shareToken });
   };
 
   const handleImportShared = async (e) => {
@@ -357,23 +354,74 @@ export default function App() {
     if (!code) return;
     const targetNode = nodes.find(n => n.shareToken === code);
     if (!targetNode) return alert('کد اشتراک در دیتابیس یافت نشد!');
-    if (targetNode.ownerId === currentUserId) return alert('این گره متعلق به خودتان است!');
-    if (!targetNode.subscribers.includes(currentUserId)) {
-      const newSubscribers = [...targetNode.subscribers, currentUserId];
-      setNodes(prev => prev.map(n => n.id === targetNode.id ? {...n, subscribers: newSubscribers} : n));
-      await supabase.from('nodes').update({ subscribers: newSubscribers }).eq('id', targetNode.id);
+    if (targetNode.ownerId === currentUserId) return alert('این نود متعلق به خودتان است!');
+    
+    // Recursive function to find all children nodes
+    const getDescendants = (nodeId, acc = []) => {
+      const children = edges.filter(e => e.source === nodeId).map(e => e.target);
+      for (const childId of children) {
+        if (!acc.includes(childId)) {
+          acc.push(childId);
+          getDescendants(childId, acc);
+        }
+      }
+      return acc;
+    };
+    
+    const descendants = getDescendants(targetNode.id);
+    const nodesToSubscribe = [targetNode.id, ...descendants];
+    
+    let hasChanges = false;
+    const newNodes = nodes.map(n => {
+       if (nodesToSubscribe.includes(n.id) && !n.subscribers.includes(currentUserId)) {
+          hasChanges = true;
+          return { ...n, subscribers: [...n.subscribers, currentUserId] };
+       }
+       return n;
+    });
+
+    if (hasChanges) {
+       setNodes(newNodes);
+       const nodesToUpdate = newNodes.filter(n => nodesToSubscribe.includes(n.id) && n.subscribers.includes(currentUserId));
+       for (const n of nodesToUpdate) {
+          await supabase.from('nodes').update({ subscribers: n.subscribers }).eq('id', n.id);
+       }
     }
+    
     setImportModalOpen(false);
     setImportTokenInput('');
+    alert('نود و تمامی زیرشاخه‌های آن با موفقیت اضافه شدند!');
+  };
+
+  const handleToggleSaveNews = async (item) => {
+    const savedBy = item.savedBy || [];
+    const isSaved = savedBy.includes(currentUserId);
+    const newSavedBy = isSaved ? savedBy.filter(id => id !== currentUserId) : [...savedBy, currentUserId];
+    setNews(prev => prev.map(n => n.id === item.id ? { ...n, savedBy: newSavedBy } : n));
+    await supabase.from('news').update({ savedBy: newSavedBy }).eq('id', item.id);
+  };
+
+  const handleToggleReadNews = async (item) => {
+    const readBy = item.readBy || [];
+    const isRead = readBy.includes(currentUserId);
+    const newReadBy = isRead ? readBy.filter(id => id !== currentUserId) : [...readBy, currentUserId];
+    setNews(prev => prev.map(n => n.id === item.id ? { ...n, readBy: newReadBy } : n));
+    await supabase.from('news').update({ readBy: newReadBy }).eq('id', item.id);
   };
 
   const activeNode = nodes.find(n => n.id === activeNodeId);
   const canEditActiveNode = activeNode && activeNode.ownerId === currentUserId;
 
-  const currentCategoryNews = news.filter(item => item.nodeId === activeNodeId).sort((a, b) => {
-    if (sortBy === 'date') return new Date(b.date) - new Date(a.date);
-    return parseInt(b.importance) - parseInt(a.importance);
-  });
+  const getSortedNews = (newsArray) => {
+    return [...newsArray].sort((a, b) => {
+      const aRead = (a.readBy || []).includes(currentUserId);
+      const bRead = (b.readBy || []).includes(currentUserId);
+      if (aRead !== bRead) return aRead ? 1 : -1;
+      
+      if (sortBy === 'date') return new Date(b.date) - new Date(a.date);
+      return parseInt(b.importance) - parseInt(a.importance);
+    });
+  };
 
   const getPathToRoot = (nodeId, currentPath = []) => {
     if (currentPath.length > 10) return currentPath;
@@ -390,6 +438,62 @@ export default function App() {
   const childEdges = activeNodeId ? edges.filter(e => e.source === activeNodeId) : [];
   const childNodes = childEdges.map(e => nodes.find(n => n.id === e.target)).filter(Boolean);
 
+  const renderNewsItem = (item, context = 'node') => {
+    const isSaved = (item.savedBy || []).includes(currentUserId);
+    const isRead = (item.readBy || []).includes(currentUserId);
+    const parentNode = nodes.find(n => n.id === item.nodeId);
+    const canEdit = context === 'node' && canEditActiveNode;
+
+    if (editingNewsId === item.id) {
+       return (
+          <form key={item.id} onSubmit={handleSaveEditNews} className="bg-slate-900 rounded-2xl border border-slate-700 p-6 flex flex-col gap-3">
+             <input required type="text" value={editNewsForm.title} onChange={e => setEditNewsForm({...editNewsForm, title: e.target.value})} className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none" />
+             <textarea required value={editNewsForm.text} onChange={e => setEditNewsForm({...editNewsForm, text: e.target.value})} rows="4" className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none resize-none"></textarea>
+             <div className="flex gap-3">
+               <input required type="date" value={editNewsForm.date} onChange={e => setEditNewsForm({...editNewsForm, date: e.target.value})} className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none text-sm flex-1" />
+               <select value={editNewsForm.importance} onChange={e => setEditNewsForm({...editNewsForm, importance: e.target.value})} className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none text-sm flex-1"><option value="1">عادی</option><option value="2">مهم</option><option value="3">فوری</option></select>
+             </div>
+             <div className="flex justify-end gap-2 mt-2">
+               <button type="button" onClick={() => setEditingNewsId(null)} className="px-5 py-2 rounded-xl text-sm bg-slate-800 hover:bg-slate-700 text-slate-300">لغو</button>
+               <button type="submit" className="px-5 py-2 rounded-xl text-sm bg-indigo-600 hover:bg-indigo-500 text-white font-bold"><Check size={16} className="inline mr-1"/> ذخیره</button>
+             </div>
+          </form>
+       );
+    }
+
+    return (
+      <article key={item.id} className={`bg-slate-900 rounded-2xl border ${isRead ? 'border-slate-800/50 opacity-60' : 'border-slate-700 shadow-md hover:border-slate-600'} p-6 flex flex-col justify-between transition-all`}>
+         <div>
+           <div className="flex justify-between items-start mb-4">
+             <div className="flex gap-2.5 text-xs font-bold text-slate-400 flex-wrap">
+                <span className="flex items-center gap-1.5 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800"><Calendar size={13} /> {item.date}</span>
+                <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${item.importance === '3' ? 'text-red-400 border-red-900/60' : item.importance === '2' ? 'text-amber-400 border-amber-900/60' : 'text-blue-400 border-blue-900/60'}`}><Star size={13} fill="currentColor" /> {item.importance === '3' ? 'فوری' : item.importance === '2' ? 'مهم' : 'عادی'}</span>
+                {context !== 'node' && parentNode && (
+                  <button onClick={() => {setActiveNodeId(parentNode.id); setActiveView('node');}} className="flex items-center gap-1.5 bg-indigo-950/30 text-indigo-400 px-3 py-1.5 rounded-lg border border-indigo-900/30 hover:bg-indigo-900/50 transition-colors"><Network size={13} /> {parentNode.name}</button>
+                )}
+             </div>
+             <div className="flex gap-2 mr-4 shrink-0">
+                <button onClick={() => handleToggleSaveNews(item)} className={`p-2 rounded-lg border transition-colors ${isSaved ? 'bg-amber-500/20 text-amber-400 border-amber-500/30 hover:bg-amber-500/30' : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-white hover:border-slate-600'}`} title="نشان‌گذاری خبر">
+                   <Bookmark size={16} fill={isSaved ? "currentColor" : "none"} />
+                </button>
+                <button onClick={() => handleToggleReadNews(item)} className={`p-2 rounded-lg border transition-colors ${isRead ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/30' : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-white hover:border-slate-600'}`} title={isRead ? 'خوانده شده' : 'علامت به عنوان خوانده شده'}>
+                   <CheckCircle size={16} />
+                </button>
+             </div>
+           </div>
+           <h3 className={`text-xl font-bold mb-3 leading-snug ${isRead ? 'text-slate-400' : 'text-white'}`}>{item.title}</h3>
+           <p className={`text-sm leading-relaxed whitespace-pre-wrap ${isRead ? 'text-slate-500' : 'text-slate-300'}`}>{item.text}</p>
+         </div>
+         {canEdit && (
+            <div className="mt-6 pt-4 border-t border-slate-800/80 flex justify-end gap-2">
+               <button onClick={() => handleStartEditNews(item)} className="text-blue-400 hover:text-blue-300 bg-slate-950 hover:bg-slate-800 p-2 rounded-lg border border-slate-800 transition-colors"><Edit2 size={16} /></button>
+               <button onClick={() => handleDeleteNews(item.id)} className="text-red-400 hover:text-red-300 bg-slate-950 hover:bg-slate-800 p-2 rounded-lg border border-slate-800 transition-colors"><Trash2 size={16} /></button>
+            </div>
+         )}
+      </article>
+    );
+  };
+
   return (
     <div dir="rtl" className="min-h-screen bg-slate-950 font-sans text-slate-100 selection:bg-indigo-500/30 flex flex-col">
       <header className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 sticky top-0 z-50 px-6 py-3">
@@ -402,29 +506,31 @@ export default function App() {
             <div className="hidden sm:flex items-center gap-2 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-xl text-xs text-indigo-300">خوش آمدید، {currentUserName}</div>
           </div>
           <div className="flex items-center gap-2.5">
-            {!activeNodeId ? (
-              <>
-                <button onClick={() => setImportModalOpen(true)} className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3.5 py-2 rounded-xl text-xs font-medium"><Download size={15} className="text-emerald-400" /> افزودن کد اشتراکی</button>
-                <button onClick={handleLogout} className="flex items-center gap-1.5 bg-red-950/30 hover:bg-red-900/50 text-red-400 border border-red-900/30 px-3.5 py-2 rounded-xl text-xs font-medium"><LogOut size={15} /> خروج</button>
-              </>
+            {activeView !== 'canvas' ? (
+              <button onClick={() => { setActiveView('canvas'); setActiveNodeId(null); }} className="flex items-center gap-2 text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl text-sm transition-colors"><ArrowRight size={18} /> بازگشت به بوم</button>
             ) : (
-              <button onClick={() => setActiveNodeId(null)} className="flex items-center gap-2 text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl text-sm"><ArrowRight size={18} /> بازگشت</button>
+              <>
+                <button onClick={() => setActiveView('calendar')} className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3.5 py-2 rounded-xl text-xs font-medium transition-colors"><Calendar size={15} className="text-blue-400" /> تقویم</button>
+                <button onClick={() => setActiveView('saved')} className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3.5 py-2 rounded-xl text-xs font-medium transition-colors"><Bookmark size={15} className="text-amber-400" /> ذخیره‌ها</button>
+                <button onClick={() => setImportModalOpen(true)} className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3.5 py-2 rounded-xl text-xs font-medium transition-colors"><Download size={15} className="text-emerald-400" /> افزودن کد</button>
+                <button onClick={handleLogout} className="flex items-center gap-1.5 bg-red-950/30 hover:bg-red-900/50 text-red-400 border border-red-900/30 px-3.5 py-2 rounded-xl text-xs font-medium transition-colors"><LogOut size={15} /> خروج</button>
+              </>
             )}
           </div>
         </div>
       </header>
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6 flex flex-col">
-        {!activeNodeId ? (
+        {activeView === 'canvas' && (
           <div className="flex-1 flex flex-col gap-4">
             <div className="bg-slate-900/90 border border-slate-800 p-3 rounded-2xl flex flex-wrap items-center justify-between gap-4">
               <form onSubmit={handleAddNode} className="flex gap-2 flex-1 max-w-md">
-                <input type="text" placeholder="نام گره جدید..." value={newNodeName} onChange={(e) => setNewNodeName(e.target.value)} className="flex-1 px-4 py-2 bg-slate-950 text-white border border-slate-800 focus:border-indigo-500 rounded-xl outline-none text-sm" />
-                <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5"><Plus size={18} /> ساخت گره</button>
+                <input type="text" placeholder="نام نود جدید..." value={newNodeName} onChange={(e) => setNewNodeName(e.target.value)} className="flex-1 px-4 py-2 bg-slate-950 text-white border border-slate-800 focus:border-indigo-500 rounded-xl outline-none text-sm" />
+                <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5"><Plus size={18} /> ساخت نود</button>
               </form>
               <div className="flex items-center gap-3">
                 <span className="text-xs text-slate-400 hidden md:inline-flex items-center gap-1"><Move size={14} /> جابجایی با ماوس</span>
-                <button onClick={() => { setConnectMode(!connectMode); setConnectSourceId(null); }} className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border ${connectMode ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse' : 'bg-slate-800 text-slate-300'}`}><Link2 size={16} /> {connectMode ? 'کلیک روی گره...' : 'اتصال گرهها'}</button>
+                <button onClick={() => { setConnectMode(!connectMode); setConnectSourceId(null); }} className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border ${connectMode ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}><Link2 size={16} /> {connectMode ? 'کلیک روی نود...' : 'اتصال نودها'}</button>
               </div>
             </div>
 
@@ -488,7 +594,9 @@ export default function App() {
               </div>
             </div>
           </div>
-        ) : (
+        )}
+
+        {activeView === 'node' && activeNodeId && (
           <div className="animate-in fade-in duration-300">
             <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               <div>
@@ -520,7 +628,7 @@ export default function App() {
               </div>
               <div className="flex gap-3 w-full md:w-auto">
                 <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-4 py-2 outline-none text-sm"><option value="date">تاریخ</option><option value="importance">اهمیت</option></select>
-                {canEditActiveNode && <button onClick={() => setShowNewsForm(!showNewsForm)} className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2"><Plus size={18} /> ثبت خبر</button>}
+                {canEditActiveNode && <button onClick={() => setShowNewsForm(!showNewsForm)} className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors"><Plus size={18} /> ثبت خبر</button>}
               </div>
             </div>
             {showNewsForm && canEditActiveNode && (
@@ -531,45 +639,44 @@ export default function App() {
                   <input required type="date" value={newsForm.date} onChange={e => setNewsForm({...newsForm, date: e.target.value})} className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none w-full text-sm" />
                   <select value={newsForm.importance} onChange={e => setNewsForm({...newsForm, importance: e.target.value})} className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none w-full text-sm"><option value="1">عادی</option><option value="2">مهم</option><option value="3">فوری</option></select>
                 </div>
-                <button type="submit" className="col-span-1 md:col-span-2 bg-indigo-600 text-white py-3 rounded-xl hover:bg-indigo-500 font-bold">انتشار خبر</button>
+                <button type="submit" className="col-span-1 md:col-span-2 bg-indigo-600 text-white py-3 rounded-xl hover:bg-indigo-500 font-bold transition-colors">انتشار خبر</button>
               </form>
             )}
             <div className="grid grid-cols-1 gap-5">
-              {currentCategoryNews.map((item) => (
-                <article key={item.id} className="bg-slate-900 rounded-2xl border border-slate-800 p-6 flex flex-col justify-between">
-                  {editingNewsId === item.id ? (
-                    <form onSubmit={handleSaveEditNews} className="flex flex-col gap-3">
-                      <input required type="text" value={editNewsForm.title} onChange={e => setEditNewsForm({...editNewsForm, title: e.target.value})} className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none" />
-                      <textarea required value={editNewsForm.text} onChange={e => setEditNewsForm({...editNewsForm, text: e.target.value})} rows="4" className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none resize-none"></textarea>
-                      <div className="flex gap-3">
-                        <input required type="date" value={editNewsForm.date} onChange={e => setEditNewsForm({...editNewsForm, date: e.target.value})} className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none text-sm flex-1" />
-                        <select value={editNewsForm.importance} onChange={e => setEditNewsForm({...editNewsForm, importance: e.target.value})} className="p-3 bg-slate-950 text-white border border-slate-800 rounded-xl outline-none text-sm flex-1"><option value="1">عادی</option><option value="2">مهم</option><option value="3">فوری</option></select>
-                      </div>
-                      <div className="flex justify-end gap-2 mt-2">
-                        <button type="button" onClick={() => setEditingNewsId(null)} className="px-5 py-2 rounded-xl text-sm bg-slate-800 hover:bg-slate-700 text-slate-300">لغو</button>
-                        <button type="submit" className="px-5 py-2 rounded-xl text-sm bg-indigo-600 hover:bg-indigo-500 text-white font-bold"><Check size={16} className="inline mr-1"/> ذخیره</button>
-                      </div>
-                    </form>
-                  ) : (
-                    <>
-                      <div>
-                        <div className="flex gap-3 mb-3 text-xs font-bold text-slate-400">
-                          <span className="flex items-center gap-1.5 bg-slate-950 px-3 py-1 rounded-lg border border-slate-800"><Calendar size={13} /> {item.date}</span>
-                          <span className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border ${item.importance === '3' ? 'text-red-400 border-red-900/60' : item.importance === '2' ? 'text-amber-400 border-amber-900/60' : 'text-blue-400 border-blue-900/60'}`}><Star size={13} fill="currentColor" /> {item.importance === '3' ? 'فوری' : item.importance === '2' ? 'مهم' : 'عادی'}</span>
-                        </div>
-                        <h3 className="text-xl font-bold text-white mb-2">{item.title}</h3>
-                        <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{item.text}</p>
-                      </div>
-                      {canEditActiveNode && (
-                        <div className="mt-5 pt-3 border-t border-slate-800/80 flex justify-end gap-2">
-                          <button onClick={() => handleStartEditNews(item)} className="text-blue-400 hover:text-blue-300 bg-slate-950 hover:bg-slate-800 p-2 rounded-lg border border-slate-800"><Edit2 size={16} /></button>
-                          <button onClick={() => handleDeleteNews(item.id)} className="text-red-400 hover:text-red-300 bg-slate-950 hover:bg-slate-800 p-2 rounded-lg border border-slate-800"><Trash2 size={16} /></button>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </article>
-              ))}
+              {getSortedNews(news.filter(item => item.nodeId === activeNodeId)).map(item => renderNewsItem(item, 'node'))}
+            </div>
+          </div>
+        )}
+
+        {activeView === 'calendar' && (
+          <div className="animate-in fade-in duration-300">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl mb-6 flex flex-wrap items-center justify-between gap-4">
+               <h2 className="text-2xl font-black text-white flex items-center gap-2"><Calendar size={24} className="text-blue-400"/> تقویم گراف</h2>
+               <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} className="bg-slate-950 border border-slate-700 rounded-xl px-4 py-2 text-white outline-none" />
+            </div>
+            <div className="grid grid-cols-1 gap-5">
+               {news.filter(n => n.date === selectedDate && visibleNodeIds.includes(n.nodeId)).length === 0 ? (
+                 <div className="text-center text-slate-500 py-10 bg-slate-900/50 rounded-2xl border border-slate-800 border-dashed">خبری در این تاریخ ثبت نشده است.</div>
+               ) : (
+                 getSortedNews(news.filter(n => n.date === selectedDate && visibleNodeIds.includes(n.nodeId)))
+                     .map(item => renderNewsItem(item, 'calendar'))
+               )}
+            </div>
+          </div>
+        )}
+
+        {activeView === 'saved' && (
+          <div className="animate-in fade-in duration-300">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl mb-6 flex flex-wrap items-center justify-between gap-4">
+               <h2 className="text-2xl font-black text-white flex items-center gap-2"><Bookmark size={24} className="text-amber-400"/> اخبار ذخیره‌شده من</h2>
+            </div>
+            <div className="grid grid-cols-1 gap-5">
+               {news.filter(n => (n.savedBy || []).includes(currentUserId) && visibleNodeIds.includes(n.nodeId)).length === 0 ? (
+                 <div className="text-center text-slate-500 py-10 bg-slate-900/50 rounded-2xl border border-slate-800 border-dashed">هیچ خبری را نشان‌گذاری نکرده‌اید.</div>
+               ) : (
+                 getSortedNews(news.filter(n => (n.savedBy || []).includes(currentUserId) && visibleNodeIds.includes(n.nodeId)))
+                     .map(item => renderNewsItem(item, 'saved'))
+               )}
             </div>
           </div>
         )}
@@ -578,9 +685,9 @@ export default function App() {
       {shareModalData && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex justify-between mb-3"><h3 className="font-bold text-lg text-white">{shareModalData.title}</h3><button onClick={() => setShareModalData(null)} className="text-slate-400"><X size={20}/></button></div>
-            <p className="text-xs text-slate-400 mb-4">{shareModalData.desc}</p>
-            <div className="bg-slate-950 border border-indigo-500/40 rounded-xl p-3 flex justify-between"><code className="text-indigo-400 font-mono text-sm select-all">{shareModalData.token}</code><button onClick={() => { navigator.clipboard.writeText(shareModalData.token); alert('کپی شد!'); }} className="bg-indigo-600 text-white text-xs px-3 py-1.5 rounded-lg">کپی</button></div>
+            <div className="flex justify-between mb-3"><h3 className="font-bold text-lg text-white">{shareModalData.title}</h3><button onClick={() => setShareModalData(null)} className="text-slate-400 hover:text-white transition-colors"><X size={20}/></button></div>
+            <p className="text-xs text-slate-400 mb-4 leading-relaxed">{shareModalData.desc}</p>
+            <div className="bg-slate-950 border border-indigo-500/40 rounded-xl p-3 flex justify-between"><code className="text-indigo-400 font-mono text-sm select-all">{shareModalData.token}</code><button onClick={() => { navigator.clipboard.writeText(shareModalData.token); alert('کپی شد!'); }} className="bg-indigo-600 hover:bg-indigo-500 transition-colors text-white text-xs px-3 py-1.5 rounded-lg">کپی</button></div>
           </div>
         </div>
       )}
@@ -588,9 +695,9 @@ export default function App() {
       {importModalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <form onSubmit={handleImportShared} className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex justify-between mb-3"><h3 className="font-bold text-lg text-white">افزودن گره مشترک</h3><button type="button" onClick={() => setImportModalOpen(false)} className="text-slate-400"><X size={20}/></button></div>
+            <div className="flex justify-between mb-3"><h3 className="font-bold text-lg text-white">افزودن نود مشترک</h3><button type="button" onClick={() => setImportModalOpen(false)} className="text-slate-400 hover:text-white transition-colors"><X size={20}/></button></div>
             <input required type="text" placeholder="کد اشتراک را اینجا وارد کنید..." value={importTokenInput} onChange={e => setImportTokenInput(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white font-mono text-sm outline-none mb-4" />
-            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-xl text-sm">اتصال به گره</button>
+            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 transition-colors text-white py-2.5 rounded-xl text-sm">اتصال به نود و زیرشاخه‌ها</button>
           </form>
         </div>
       )}
