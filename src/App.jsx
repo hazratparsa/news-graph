@@ -34,7 +34,9 @@ export default function App() {
   const canvasRef = useRef(null);
   const [editingNodeId, setEditingNodeId] = useState(null);
   const [editNodeName, setEditNodeName] = useState('');
-  const [shareModalData, setShareModalData] = useState(null);
+  const [shareSelection, setShareSelection] = useState(null);
+  const [selectedToShare, setSelectedToShare] = useState([]);
+  const [generatedShareToken, setGeneratedShareToken] = useState('');
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importTokenInput, setImportTokenInput] = useState('');
   const [showNewsForm, setShowNewsForm] = useState(false);
@@ -249,7 +251,7 @@ export default function App() {
     const { error } = await supabase.from('nodes').insert([newNode]);
     if (error) {
       console.error(error);
-      alert('خطا در ذخیره نود');
+      alert('خطا در ذخیره گره');
       setNodes(prevNodes => prevNodes.filter(n => n.id !== newNode.id));
     }
   };
@@ -272,14 +274,14 @@ export default function App() {
   const handleDeleteNode = async (node, e) => {
     e.stopPropagation();
     if (node.ownerId !== currentUserId) {
-      if (window.confirm(`آیا می‌خواهید این نود را از بوم خود حذف کنید؟`)) {
+      if (window.confirm(`آیا می‌خواهید این گره را از بوم خود حذف کنید؟`)) {
         const newSubscribers = node.subscribers.filter(id => id !== currentUserId);
         setNodes(prev => prev.map(n => n.id === node.id ? {...n, subscribers: newSubscribers} : n));
         await supabase.from('nodes').update({ subscribers: newSubscribers }).eq('id', node.id);
       }
       return;
     }
-    if (window.confirm(`آیا از حذف کامل نود مطمئن هستید؟`)) {
+    if (window.confirm(`آیا از حذف کامل گره مطمئن هستید؟`)) {
       setNodes(prev => prev.filter(n => n.id !== node.id));
       await supabase.from('nodes').delete().eq('id', node.id);
       
@@ -345,18 +347,6 @@ export default function App() {
 
   const handleShareSingleNode = (node, e) => {
     e.stopPropagation();
-    setShareModalData({ title: `اشتراک‌گذاری نود «${node.name}»`, desc: 'با افزودن این کد، نود و تمامی فرزندان آن اضافه خواهند شد.', token: node.shareToken });
-  };
-
-  const handleImportShared = async (e) => {
-    e.preventDefault();
-    const code = importTokenInput.trim();
-    if (!code) return;
-    const targetNode = nodes.find(n => n.shareToken === code);
-    if (!targetNode) return alert('کد اشتراک در دیتابیس یافت نشد!');
-    if (targetNode.ownerId === currentUserId) return alert('این نود متعلق به خودتان است!');
-    
-    // Recursive function to find all children nodes
     const getDescendants = (nodeId, acc = []) => {
       const children = edges.filter(e => e.source === nodeId).map(e => e.target);
       for (const childId of children) {
@@ -367,30 +357,43 @@ export default function App() {
       }
       return acc;
     };
+    const descendantsIds = getDescendants(node.id);
+    const descendantsNodes = nodes.filter(n => descendantsIds.includes(n.id));
     
-    const descendants = getDescendants(targetNode.id);
-    const nodesToSubscribe = [targetNode.id, ...descendants];
-    
-    let hasChanges = false;
-    const newNodes = nodes.map(n => {
-       if (nodesToSubscribe.includes(n.id) && !n.subscribers.includes(currentUserId)) {
-          hasChanges = true;
-          return { ...n, subscribers: [...n.subscribers, currentUserId] };
-       }
-       return n;
-    });
+    setShareSelection({ rootNode: node, descendants: descendantsNodes });
+    setSelectedToShare([node.id, ...descendantsIds]);
+    setGeneratedShareToken('');
+  };
 
-    if (hasChanges) {
-       setNodes(newNodes);
-       const nodesToUpdate = newNodes.filter(n => nodesToSubscribe.includes(n.id) && n.subscribers.includes(currentUserId));
-       for (const n of nodesToUpdate) {
-          await supabase.from('nodes').update({ subscribers: n.subscribers }).eq('id', n.id);
-       }
+  const handleImportShared = async (e) => {
+    e.preventDefault();
+    const code = importTokenInput.trim();
+    if (!code) return;
+    
+    let tokens = [];
+    if (code.startsWith('BNDL-')) {
+        try { tokens = atob(code.replace('BNDL-', '')).split(','); } catch(e) { return alert('کد نامعتبر است'); }
+    } else {
+        tokens = [code];
     }
     
+    const targetNodes = nodes.filter(n => tokens.includes(n.shareToken));
+    if (targetNodes.length === 0) return alert('گره‌ای با این کد یافت نشد!');
+    
+    const nodesToSubscribe = targetNodes.filter(n => n.ownerId !== currentUserId && !n.subscribers.includes(currentUserId));
+    if (nodesToSubscribe.length === 0) return alert('شما از قبل به تمام این گره‌ها دسترسی دارید یا مالک آن‌ها هستید.');
+    
+    let newNodes = [...nodes];
+    for (const targetNode of nodesToSubscribe) {
+        const newSubscribers = [...targetNode.subscribers, currentUserId];
+        newNodes = newNodes.map(n => n.id === targetNode.id ? { ...n, subscribers: newSubscribers } : n);
+        await supabase.from('nodes').update({ subscribers: newSubscribers }).eq('id', targetNode.id);
+    }
+    
+    setNodes(newNodes);
     setImportModalOpen(false);
     setImportTokenInput('');
-    alert('نود و تمامی زیرشاخه‌های آن با موفقیت اضافه شدند!');
+    alert('گره(های) انتخابی با موفقیت اضافه شدند!');
   };
 
   const handleToggleSaveNews = async (item) => {
@@ -525,12 +528,12 @@ export default function App() {
           <div className="flex-1 flex flex-col gap-4">
             <div className="bg-slate-900/90 border border-slate-800 p-3 rounded-2xl flex flex-wrap items-center justify-between gap-4">
               <form onSubmit={handleAddNode} className="flex gap-2 flex-1 max-w-md">
-                <input type="text" placeholder="نام نود جدید..." value={newNodeName} onChange={(e) => setNewNodeName(e.target.value)} className="flex-1 px-4 py-2 bg-slate-950 text-white border border-slate-800 focus:border-indigo-500 rounded-xl outline-none text-sm" />
-                <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5"><Plus size={18} /> ساخت نود</button>
+                <input type="text" placeholder="نام گره جدید..." value={newNodeName} onChange={(e) => setNewNodeName(e.target.value)} className="flex-1 px-4 py-2 bg-slate-950 text-white border border-slate-800 focus:border-indigo-500 rounded-xl outline-none text-sm" />
+                <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5"><Plus size={18} /> ساخت گره</button>
               </form>
               <div className="flex items-center gap-3">
                 <span className="text-xs text-slate-400 hidden md:inline-flex items-center gap-1"><Move size={14} /> جابجایی با ماوس</span>
-                <button onClick={() => { setConnectMode(!connectMode); setConnectSourceId(null); }} className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border ${connectMode ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}><Link2 size={16} /> {connectMode ? 'کلیک روی نود...' : 'اتصال نودها'}</button>
+                <button onClick={() => { setConnectMode(!connectMode); setConnectSourceId(null); }} className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border ${connectMode ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}><Link2 size={16} /> {connectMode ? 'کلیک روی گره...' : 'اتصال گره‌ها'}</button>
               </div>
             </div>
 
@@ -682,12 +685,58 @@ export default function App() {
         )}
       </main>
 
-      {shareModalData && (
+      {shareSelection && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex justify-between mb-3"><h3 className="font-bold text-lg text-white">{shareModalData.title}</h3><button onClick={() => setShareModalData(null)} className="text-slate-400 hover:text-white transition-colors"><X size={20}/></button></div>
-            <p className="text-xs text-slate-400 mb-4 leading-relaxed">{shareModalData.desc}</p>
-            <div className="bg-slate-950 border border-indigo-500/40 rounded-xl p-3 flex justify-between"><code className="text-indigo-400 font-mono text-sm select-all">{shareModalData.token}</code><button onClick={() => { navigator.clipboard.writeText(shareModalData.token); alert('کپی شد!'); }} className="bg-indigo-600 hover:bg-indigo-500 transition-colors text-white text-xs px-3 py-1.5 rounded-lg">کپی</button></div>
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl max-h-[90vh] flex flex-col">
+            <div className="flex justify-between mb-4">
+               <h3 className="font-bold text-lg text-white">اشتراک‌گذاری گره «{shareSelection.rootNode.name}»</h3>
+               <button onClick={() => setShareSelection(null)} className="text-slate-400 hover:text-white transition-colors"><X size={20}/></button>
+            </div>
+            
+            {!generatedShareToken ? (
+              <div className="flex flex-col overflow-hidden">
+                <p className="text-sm text-slate-400 mb-4">انتخاب کنید کدام گره‌ها در این کد اشتراک قرار بگیرند:</p>
+                <div className="flex flex-col gap-2 mb-6 overflow-y-auto pr-2 custom-scrollbar">
+                   <label className="flex items-center gap-3 p-2 bg-slate-950 rounded-xl border border-slate-800 cursor-pointer">
+                      <input type="checkbox" checked={selectedToShare.includes(shareSelection.rootNode.id)} onChange={(e) => {
+                         if(e.target.checked) setSelectedToShare([...selectedToShare, shareSelection.rootNode.id]);
+                         else setSelectedToShare(selectedToShare.filter(id => id !== shareSelection.rootNode.id));
+                      }} className="w-4 h-4 accent-indigo-600" />
+                      <span className="text-white text-sm font-bold">{shareSelection.rootNode.name} (گره اصلی)</span>
+                   </label>
+                   {shareSelection.descendants.map(desc => (
+                     <label key={desc.id} className="flex items-center gap-3 p-2 hover:bg-slate-950/50 rounded-xl border border-transparent hover:border-slate-800 transition-colors mr-4 cursor-pointer">
+                        <input type="checkbox" checked={selectedToShare.includes(desc.id)} onChange={(e) => {
+                           if(e.target.checked) setSelectedToShare([...selectedToShare, desc.id]);
+                           else setSelectedToShare(selectedToShare.filter(id => id !== desc.id));
+                        }} className="w-4 h-4 accent-indigo-600" />
+                        <span className="text-slate-300 text-sm">{desc.name}</span>
+                     </label>
+                   ))}
+                   {shareSelection.descendants.length === 0 && (
+                     <div className="text-xs text-slate-500 text-center py-2">این گره هیچ زیرشاخه‌ای ندارد.</div>
+                   )}
+                </div>
+                <button onClick={() => {
+                   const tokens = nodes.filter(n => selectedToShare.includes(n.id)).map(n => n.shareToken);
+                   const b64 = btoa(tokens.join(','));
+                   setGeneratedShareToken(`BNDL-${b64}`);
+                }} disabled={selectedToShare.length === 0} className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white py-2.5 rounded-xl text-sm font-bold transition-colors shrink-0">
+                   تولید کد اشتراک
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col">
+                <p className="text-sm text-slate-400 mb-4">کد زیر را کپی کرده و به دوستان خود بدهید:</p>
+                <div className="bg-slate-950 border border-indigo-500/40 rounded-xl p-3 flex justify-between gap-3 mb-4">
+                   <code className="text-indigo-400 font-mono text-xs break-all select-all flex-1">{generatedShareToken}</code>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                   <button onClick={() => { navigator.clipboard.writeText(generatedShareToken); alert('کپی شد!'); }} className="flex-1 bg-indigo-600 hover:bg-indigo-500 transition-colors text-white py-2.5 rounded-xl font-bold text-sm">کپی کد</button>
+                   <button onClick={() => setShareSelection(null)} className="flex-1 bg-slate-800 hover:bg-slate-700 transition-colors text-white py-2.5 rounded-xl text-sm">بستن</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -695,9 +744,9 @@ export default function App() {
       {importModalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <form onSubmit={handleImportShared} className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex justify-between mb-3"><h3 className="font-bold text-lg text-white">افزودن نود مشترک</h3><button type="button" onClick={() => setImportModalOpen(false)} className="text-slate-400 hover:text-white transition-colors"><X size={20}/></button></div>
+            <div className="flex justify-between mb-3"><h3 className="font-bold text-lg text-white">افزودن گره مشترک</h3><button type="button" onClick={() => setImportModalOpen(false)} className="text-slate-400 hover:text-white transition-colors"><X size={20}/></button></div>
             <input required type="text" placeholder="کد اشتراک را اینجا وارد کنید..." value={importTokenInput} onChange={e => setImportTokenInput(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white font-mono text-sm outline-none mb-4" />
-            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 transition-colors text-white py-2.5 rounded-xl text-sm">اتصال به نود و زیرشاخه‌ها</button>
+            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 transition-colors text-white py-2.5 rounded-xl text-sm">اتصال به گره(ها)</button>
           </form>
         </div>
       )}
