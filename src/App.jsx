@@ -45,6 +45,7 @@ export default function App() {
   const [editNewsForm, setEditNewsForm] = useState(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
+  const [lastPanPosition, setLastPanPosition] = useState({ x: 0, y: 0 });
   const [sortBy, setSortBy] = useState('date');
 
   useEffect(() => {
@@ -170,31 +171,46 @@ export default function App() {
   const visibleNodeIds = visibleNodes.map(n => n.id);
   const visibleEdges = edges.filter(e => visibleNodeIds.includes(e.source) && visibleNodeIds.includes(e.target));
 
+  const getClientPos = (e) => {
+    if (e.touches && e.touches.length > 0) {
+      return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+    return { x: e.clientX, y: e.clientY };
+  };
+
   const handleMouseDownOnNode = (e, node) => {
     if (editingNodeId === node.id || connectMode) return;
     e.stopPropagation();
     setDraggingNodeId(node.id);
     setHasDragged(false);
-    setDragOffset({ x: e.clientX - node.x, y: e.clientY - node.y });
+    const pos = getClientPos(e);
+    setDragOffset({ x: pos.x - node.x, y: pos.y - node.y });
   };
 
   const handleCanvasMouseDown = (e) => {
     if (e.target === canvasRef.current || e.target.closest('svg') === e.target) {
       setIsPanning(true);
+      const pos = getClientPos(e);
+      setLastPanPosition({ x: pos.x, y: pos.y });
     }
   };
 
   const handleCanvasMouseMove = (e) => {
+    const pos = getClientPos(e);
+    
     if (draggingNodeId) {
-      const newX = e.clientX - dragOffset.x;
-      const newY = e.clientY - dragOffset.y;
+      const newX = pos.x - dragOffset.x;
+      const newY = pos.y - dragOffset.y;
       const node = nodes.find(n => n.id === draggingNodeId);
       if (node && (Math.abs(newX - node.x) > 3 || Math.abs(newY - node.y) > 3)) {
          setHasDragged(true);
       }
       setNodes(nodes.map(n => n.id === draggingNodeId ? { ...n, x: newX, y: newY } : n));
     } else if (isPanning) {
-      setPan(prev => ({ x: prev.x + e.movementX, y: prev.y + e.movementY }));
+      const dx = pos.x - lastPanPosition.x;
+      const dy = pos.y - lastPanPosition.y;
+      setPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+      setLastPanPosition({ x: pos.x, y: pos.y });
     }
   };
 
@@ -560,7 +576,7 @@ export default function App() {
               </div>
             </div>
 
-            <div ref={canvasRef} onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} className={`relative flex-1 min-h-[560px] w-full bg-slate-950 rounded-3xl border border-slate-800/80 overflow-hidden select-none ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`} style={{ backgroundImage: 'radial-gradient(#334155 1px, transparent 1px)', backgroundSize: '28px 28px', backgroundPosition: `${pan.x}px ${pan.y}px` }}>
+            <div ref={canvasRef} onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} onTouchStart={handleCanvasMouseDown} onTouchMove={handleCanvasMouseMove} onTouchEnd={handleCanvasMouseUp} onTouchCancel={handleCanvasMouseUp} className={`relative flex-1 min-h-[560px] w-full bg-slate-950 rounded-3xl border border-slate-800/80 overflow-hidden select-none ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`} style={{ backgroundImage: 'radial-gradient(#334155 1px, transparent 1px)', backgroundSize: '28px 28px', backgroundPosition: `${pan.x}px ${pan.y}px`, touchAction: 'none' }}>
               <div style={{ transform: `translate(${pan.x}px, ${pan.y}px)`, position: 'absolute', inset: 0, pointerEvents: 'none' }}>
               <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none z-0">
                 <defs>
@@ -594,7 +610,7 @@ export default function App() {
                 const isSelectedSource = connectSourceId === node.id;
                 const nodeNewsCount = news.filter(n => n.nodeId === node.id).length;
                 return (
-                  <div key={node.id} onMouseDown={(e) => handleMouseDownOnNode(e, node)} onClick={() => handleNodeClick(node)} style={{ left: `${node.x}px`, top: `${node.y}px`, transform: 'translate(-50%, -50%)' }} className={`absolute z-10 w-36 h-36 rounded-full flex flex-col items-center justify-center transition-shadow duration-200 group pointer-events-auto ${draggingNodeId === node.id ? 'cursor-grabbing scale-105' : 'cursor-grab'} ${isSelectedSource ? 'bg-amber-950/90 border-4 border-amber-400' : isOwner ? 'bg-slate-900/95 border-2 border-indigo-500/60 hover:border-indigo-400 shadow-[0_0_30px_rgba(79,70,229,0.2)]' : 'bg-slate-900/95 border-2 border-emerald-500/60 hover:border-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.2)]'}`}>
+                  <div key={node.id} onMouseDown={(e) => handleMouseDownOnNode(e, node)} onTouchStart={(e) => handleMouseDownOnNode(e, node)} onClick={() => handleNodeClick(node)} style={{ left: `${node.x}px`, top: `${node.y}px`, transform: 'translate(-50%, -50%)', touchAction: 'none' }} className={`absolute z-10 w-36 h-36 rounded-full flex flex-col items-center justify-center transition-shadow duration-200 group pointer-events-auto ${draggingNodeId === node.id ? 'cursor-grabbing scale-105' : 'cursor-grab'} ${isSelectedSource ? 'bg-amber-950/90 border-4 border-amber-400' : isOwner ? 'bg-slate-900/95 border-2 border-indigo-500/60 hover:border-indigo-400 shadow-[0_0_30px_rgba(79,70,229,0.2)]' : 'bg-slate-900/95 border-2 border-emerald-500/60 hover:border-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.2)]'}`}>
                     {!isOwner && <span className="absolute -top-2 bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">اشتراکی از {node.ownerName}</span>}
                     {editingNodeId !== node.id && !connectMode && (
                       <div className="absolute -top-4 md:-top-3 -right-4 md:-right-3 flex gap-1 opacity-100 md:opacity-0 group-hover:opacity-100 z-30 bg-slate-950/90 p-1.5 md:p-1 rounded-full border border-slate-700 shadow-xl">
